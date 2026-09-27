@@ -53,7 +53,9 @@ func _ready() -> void:
 	add_child(hud)
 	player.hud = hud
 	player.grabbed_ball.connect(_on_player_grabbed)
+	player.hoop = hoop
 	player.fumbled.connect(func() -> void: hud.flash("Fumble!", Color(1.0, 0.6, 0.3)))
+	player.threw_ball.connect(_on_player_threw)
 
 	best = _load_best()
 	_reset_round()
@@ -106,6 +108,15 @@ func _on_player_grabbed(b: Ball) -> void:
 		round_state = RoundState.RUNNING
 	if b.is_money and b.live:
 		hud.flash("Money ball", Color(1.0, 0.85, 0.3))
+
+
+func _on_player_threw(_b: Ball, speed: float) -> void:
+	if speed > 16.0:
+		hud.flash("YEET", Color(0.6, 0.9, 1.0))
+
+
+func _on_ball_airballed(_b: Ball) -> void:
+	hud.flash("AIRBALL", Color(1.0, 0.4, 0.35))
 
 
 func _on_ball_scored(b: Ball) -> void:
@@ -175,7 +186,6 @@ func _setup_input() -> void:
 	_bind_keys("drop", [KEY_Q])
 	_bind_keys("restart", [KEY_R])
 	_bind_mouse("grab", MOUSE_BUTTON_LEFT)
-	_bind_mouse("form", MOUSE_BUTTON_RIGHT)
 
 
 func _bind_keys(action: String, keys: Array) -> void:
@@ -225,6 +235,7 @@ func _build_environment() -> void:
 
 func _build_ground_and_fence() -> void:
 	var floor_body := Util.static_box(Vector3(60.0, 1.0, 60.0), null, Util.surface(0.0, 0.8))
+	floor_body.add_to_group("floor")
 	floor_body.position = Vector3(0.0, -0.5, 5.0)
 	add_child(floor_body)
 
@@ -363,6 +374,7 @@ func _build_racks() -> void:
 			b.position = home
 			add_child(b)
 			b.scored.connect(_on_ball_scored)
+			b.airballed.connect(_on_ball_airballed)
 			balls.append(b)
 			ball_homes.append(home)
 

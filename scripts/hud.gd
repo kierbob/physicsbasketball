@@ -1,6 +1,6 @@
 class_name Hud
 extends CanvasLayer
-## Score, clock, shot popups, crosshair and the pull-back power meter.
+## Score, clock, shot popups and the crosshair.
 
 var _stats: Label
 var _clock: Label
@@ -9,8 +9,6 @@ var _banner: Label
 var _help: Label
 var _overlay: Control
 
-var _power := 0.0
-var _power_visible := false
 var _popup_time := 0.0
 
 
@@ -31,8 +29,8 @@ func _ready() -> void:
 	_help.modulate = Color(1, 1, 1, 0.8)
 	_help.text = "\n".join([
 		"WASD move  ·  Space jump  ·  Shift sprint",
-		"Hold LMB: reach out and grab a ball",
-		"Hold RMB: shooting form  →  pull mouse back, flick it forward to shoot",
+		"Hold LMB: grab a ball and keep holding to carry it",
+		"Whip the mouse and let go of LMB to hurl it",
 		"Q drop  ·  R re-rack  ·  Esc free the mouse",
 	])
 
@@ -79,24 +77,7 @@ func set_banner(text: String) -> void:
 	_banner.text = text
 
 
-func set_power(value: float, visible_now: bool) -> void:
-	_power = clampf(value, 0.0, 1.0)
-	_power_visible = visible_now
-
-
 func _draw_overlay() -> void:
 	var center := _overlay.size * 0.5
 	_overlay.draw_circle(center, 3.0, Color(1, 1, 1, 0.9))
 	_overlay.draw_arc(center, 6.0, 0.0, TAU, 20, Color(0, 0, 0, 0.5), 1.5)
-	if not _power_visible:
-		return
-	# Vertical meter to the right of the crosshair.
-	var rect := Rect2(center + Vector2(48, -80), Vector2(12, 160))
-	_overlay.draw_rect(rect, Color(0, 0, 0, 0.45))
-	var fill_h := rect.size.y * _power
-	var fill := Rect2(rect.position + Vector2(0, rect.size.y - fill_h), Vector2(rect.size.x, fill_h))
-	_overlay.draw_rect(fill, Color(0.3, 0.9, 0.4).lerp(Color(1.0, 0.3, 0.2), _power))
-	for i in range(1, 4):
-		var y := rect.position.y + rect.size.y * i / 4.0
-		_overlay.draw_line(Vector2(rect.position.x - 3, y), Vector2(rect.end.x + 3, y), Color(1, 1, 1, 0.5), 1.0)
-	_overlay.draw_rect(rect, Color(1, 1, 1, 0.7), false, 1.5)

@@ -3,6 +3,7 @@ extends RigidBody3D
 ## A basketball. Knows whether it went through the hoop and whether that counts.
 
 signal scored(ball: Ball)
+signal airballed(ball: Ball)
 
 const RADIUS := 0.12
 const RESPAWN_POINT := Vector3(0.0, 1.5, 6.0)
@@ -36,11 +37,11 @@ func _ready() -> void:
 	collision_layer = Util.LAYER_BALL
 	collision_mask = Util.LAYER_WORLD | Util.LAYER_BALL | Util.LAYER_HAND | Util.LAYER_PLAYER
 	linear_damp_mode = RigidBody3D.DAMP_MODE_REPLACE
-	linear_damp = 0.02
+	linear_damp = 0.0
 	angular_damp_mode = RigidBody3D.DAMP_MODE_REPLACE
 	angular_damp = 0.15
 	# Static surfaces use bounce 0, so this value decides every bounce.
-	physics_material_override = Util.surface(0.78, 0.8)
+	physics_material_override = Util.surface(0.82, 0.8)
 
 	var sphere := SphereShape3D.new()
 	sphere.radius = RADIUS
@@ -96,6 +97,11 @@ func _on_body_entered(body: Node) -> void:
 		touched_rim = true
 	elif body.is_in_group("backboard"):
 		touched_board = true
+	elif body.is_in_group("floor") and in_flight_shot:
+		# The shot is over once it hits the ground; a bounce in doesn't count.
+		in_flight_shot = false
+		if not touched_rim and not touched_board:
+			airballed.emit(self)
 
 
 ## Puts the ball back on its rack, frozen, ready for a new round.

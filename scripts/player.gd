@@ -1,47 +1,51 @@
 class_name Player
 extends CharacterBody3D
-## First-person player with two physics hands.
+## First-person player with two floppy physics hands.
 ##
-## Hold LMB to reach out and grab a ball. Hold RMB to bring it up into shooting
-## form, pull the mouse back (down) to load the shot, then flick it forward (up)
-## to shoot. How far you pull back decides the power; where you look decides the
-## direction and arc.
+## Hold LMB to reach out and grab a ball, keep holding to carry it, then whip
+## the mouse and let go of LMB to hurl it. The ball keeps the speed your arms
+## gave it. A small hidden assist nudges throws that were already close.
 
 signal grabbed_ball(ball: Ball)
+signal threw_ball(ball: Ball, speed: float)
 signal fumbled
 
-enum State { EMPTY, HOLD, FORM, LAUNCH }
+enum State { EMPTY, HOLD }
 
 const WALK_SPEED := 4.5
 const SPRINT_SPEED := 7.0
 const JUMP_VELOCITY := 4.2
 const MOUSE_SENS := 0.0022
-const FORM_TURN_SCALE := 0.6
 const EYE_HEIGHT := 1.65
 
 const HAND_RADIUS := 0.055
 const REACH := 1.7
 const GRAB_DISTANCE := Ball.RADIUS + 0.12
-const FUMBLE_DISTANCE := 0.6
-const SETTLE_TIME := 0.35 ## grace period while the ball travels into the hands
-const HAND_GAIN := 25.0
-const BALL_GAIN := 20.0
 const UPPER_ARM := 0.3
 const FOREARM := 0.3
 
-# Shot tuning.
-const PULL_PIXELS := 500.0 ## mouse travel (px) for a full pull-back
-const FLICK_PIXELS := 25.0 ## quick upward mouse travel (px) that fires the shot
-const FLICK_DECAY := 300.0 ## px/s; easing the mouse up slower than this just fine-tunes power
-const MIN_SHOT_SPEED := 6.0
-const MAX_SHOT_SPEED := 11.5
-const LOAD_DISTANCE := 0.28 ## how far back the ball comes at full pull
-const EXTEND_DISTANCE := 0.5 ## push from the set point to the release
-const BACKSPIN := 14.0 ## rad/s
-const BASE_ARC_DEG := 45.0 ## launch angle when looking level
-const ARC_PER_PITCH := 0.5 ## extra launch angle per degree of looking up
+# Floppy arms: an underdamped spring pulls each hand toward where it wants to be.
+const HAND_SPRING := 450.0
+const HAND_DAMP := 16.0
+const HAND_MAX_SPEED := 30.0
+const BALL_GAIN := 30.0 ## how tightly the ball sticks between the hands
+const STUCK_DISTANCE := 1.0 ## ball this far from the hands for a moment = fumble
+
+# Throwing.
+const HOLD_OFFSET := Vector3(0.0, -0.15, -0.62) ## ball position, camera space
+const THROW_WINDOW := 0.15 ## s; the fastest arm speed in this window is used
+const THROW_BOOST := 1.35 ## multiplies the arm's whip speed
+const THROW_FORWARD := 1.1 ## forward push per m/s of whip speed
+const MIN_THROW := 2.5 ## slower than this is a gentle drop, not a shot
+const MAX_THROW := 22.0
+const BACKSPIN := 10.0
+
+# Hidden assist: throws whose path already comes near the hoop get nudged in.
+const ASSIST_RADIUS := 1.4
+const ASSIST_STRENGTH := 0.85
 
 var hud: Hud
+var hoop: Hoop
 var state := State.EMPTY
 var ball: Ball
 var pitch := 0.0
@@ -53,16 +57,12 @@ var _upper_arms: Array[MeshInstance3D] = []
 var _forearms: Array[MeshInstance3D] = []
 
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
-var _stroke := 0.0 # 0 = set point, -1 = fully loaded
-var _flick := 0.0
-var _flick_start_stroke := 0.0
-var _launch_pos := 0.0
-var _launch_speed := 0.0
-var _launch_pull := 0.0
+var _samples: Array[Vector3] = [] # recent ball velocity relative to the player
+var _sample_times: Array[float] = []
+var _stuck_time := 0.0
 var _follow_local: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
 var _follow_time := 0.0
 var _excepted: Dictionary = {} # Ball -> seconds left (INF while held)
-var _settle := 0.0
 
 
 func _ready() -> void:
@@ -147,41 +147,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseMotion:
 		var rel: Vector2 = event.relative
-		var shooting := state == State.FORM or state == State.LAUNCH
-		rotate_y(-rel.x * MOUSE_SENS * (FORM_TURN_SCALE if shooting else 1.0))
-		if state == State.FORM:
-			_shot_motion(rel.y)
-		elif not shooting:
-			pitch = clampf(pitch - rel.y * MOUSE_SENS, -1.45, 1.45)
-			head.rotation.x = pitch
-	elif event.is_action_pressed("form") and state == State.HOLD:
-		state = State.FORM
-		_stroke = 0.0
-		_flick = 0.0
-		_settle = SETTLE_TIME
-	elif event.is_action_released("form") and state == State.FORM:
-		state = State.HOLD
-	elif event.is_action_pressed("drop") and (state == State.HOLD or state == State.FORM):
-		var fwd := -camera.global_transform.basis.z
-		_let_go(velocity + fwd * 1.0, Vector3.ZERO, false)
-
-
-## Mouse Y while in form: pulling back (down) loads, easing up slowly unloads,
-## and a quick flick up shoots with the power you had when the flick started.
-func _shot_motion(dy: float) -> void:
-	if dy > 0.0:
-		_stroke = maxf(_stroke - dy / PULL_PIXELS, -1.0)
-		_flick = 0.0
-	elif dy < 0.0:
-		if _flick <= 0.0:
-			_flick_start_stroke = _stroke
-		_flick += -dy
-		_stroke = minf(_stroke - dy / PULL_PIXELS, 0.0)
-		if _flick >= FLICK_PIXELS and _flick_start_stroke <= -0.05:
-			_launch_pull = -_flick_start_stroke
-			_launch_speed = lerpf(MIN_SHOT_SPEED, MAX_SHOT_SPEED, _launch_pull)
-			_launch_pos = _stroke * LOAD_DISTANCE
-			state = State.LAUNCH
+		rotate_y(-rel.x * MOUSE_SENS)
+		pitch = clampf(pitch - rel.y * MOUSE_SENS, -1.45, 1.45)
+		head.rotation.x = pitch
+	elif event.is_action_pressed("drop") and state == State.HOLD:
+		_let_go(velocity + _flat_forward(), Vector3.ZERO, false)
 
 
 # --- Simulation ----------------------------------------------------------
@@ -189,11 +159,11 @@ func _shot_motion(dy: float) -> void:
 func _physics_process(delta: float) -> void:
 	_move(delta)
 	_tick_exceptions(delta)
-	_flick = maxf(0.0, _flick - FLICK_DECAY * delta)
-	_settle = maxf(0.0, _settle - delta)
 
 	var targets: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
-	var hand_ff := velocity
+	if state == State.HOLD and not Input.is_action_pressed("grab"):
+		_throw()
+
 	match state:
 		State.EMPTY:
 			if Input.is_action_pressed("grab") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -210,41 +180,15 @@ func _physics_process(delta: float) -> void:
 				targets[0] = camera.to_global(_idle_offset(0))
 				targets[1] = camera.to_global(_idle_offset(1))
 		State.HOLD:
-			var hold := camera.to_global(Vector3(0.0, -0.26, -0.48))
+			var hold := camera.to_global(HOLD_OFFSET)
 			var side := camera.global_transform.basis.x * (Ball.RADIUS + HAND_RADIUS)
 			targets[0] = hold - side
 			targets[1] = hold + side
-			_drive_ball(hold, velocity)
-		State.FORM, State.LAUNCH:
-			var shot := _shot_frame()
-			var set_point: Vector3 = shot[0]
-			var dir: Vector3 = shot[1]
-			var right: Vector3 = shot[2]
-			var along := _stroke * LOAD_DISTANCE
-			var ball_ff := velocity
-			if state == State.LAUNCH:
-				_launch_pos += _launch_speed * delta
-				along = _launch_pos
-				ball_ff += dir * _launch_speed
-				hand_ff = ball_ff
-			var target := set_point + dir * along
-			var off := Ball.RADIUS + HAND_RADIUS
-			# Shooting hand under/behind the ball, guide hand on its side.
-			targets[0] = target - right * off
-			targets[1] = target - dir * off
-			if state == State.LAUNCH and _launch_pos >= EXTEND_DISTANCE:
-				_follow_local[0] = camera.to_local(targets[0])
-				_follow_local[1] = camera.to_local(targets[1] + dir * 0.1)
-				_follow_time = 0.45
-				_let_go(velocity + dir * _launch_speed, right * BACKSPIN, true)
-			else:
-				_drive_ball(target, ball_ff)
 
-	_drive_hands(targets, hand_ff)
+	_drive_hands(targets, delta)
+	if state == State.HOLD:
+		_drive_ball(delta)
 	_update_arms()
-	if hud:
-		var aiming := state == State.FORM or state == State.LAUNCH
-		hud.set_power(_launch_pull if state == State.LAUNCH else -_stroke, aiming)
 
 
 func _move(delta: float) -> void:
@@ -270,33 +214,93 @@ func _move(delta: float) -> void:
 			(body as RigidBody3D).apply_central_impulse(push)
 
 
-## Returns [set_point, launch_dir, right] for the current aim.
-func _shot_frame() -> Array:
+func _drive_hands(targets: Array[Vector3], delta: float) -> void:
+	for i in 2:
+		var hand := hands[i]
+		var err := targets[i] - hand.global_position
+		if err.length() > 1.5:
+			# Got stuck somewhere silly; snap back.
+			hand.global_position = targets[i]
+			hand.linear_velocity = velocity
+			continue
+		var accel := err * HAND_SPRING + (velocity - hand.linear_velocity) * HAND_DAMP
+		hand.linear_velocity = (hand.linear_velocity + accel * delta).limit_length(HAND_MAX_SPEED)
+
+
+## The ball rides between the hands, so it wobbles and whips along with them.
+func _drive_ball(delta: float) -> void:
+	var mid := (hands[0].global_position + hands[1].global_position) * 0.5
+	var mid_vel := (hands[0].linear_velocity + hands[1].linear_velocity) * 0.5
+	var err := mid - ball.global_position
+	if err.length() > STUCK_DISTANCE:
+		_stuck_time += delta
+		if _stuck_time > 0.3:
+			_let_go(ball.linear_velocity, ball.angular_velocity, false)
+			fumbled.emit()
+			return
+	else:
+		_stuck_time = 0.0
+	ball.linear_velocity = (mid_vel + err * BALL_GAIN).limit_length(MAX_THROW)
+	ball.angular_velocity *= 0.85
+
+	var now := Time.get_ticks_msec() / 1000.0
+	_samples.append(ball.linear_velocity - velocity)
+	_sample_times.append(now)
+	while not _sample_times.is_empty() and now - _sample_times[0] > THROW_WINDOW:
+		_samples.pop_front()
+		_sample_times.pop_front()
+
+
+func _throw() -> void:
+	# Use the fastest whip from the last moment, so letting go a hair late still works.
+	var whip := Vector3.ZERO
+	for s in _samples:
+		if s.length() > whip.length():
+			whip = s
+	var fwd := _flat_forward()
+	var fling := whip * THROW_BOOST + fwd * whip.length() * THROW_FORWARD
+	if fling.length() < MIN_THROW:
+		_let_go(velocity + fwd * 1.0, Vector3.ZERO, false)
+		return
+	fling = fling.limit_length(MAX_THROW)
+	var vel := _assist(ball.global_position, velocity + fling)
+	var spin := camera.global_transform.basis.x * BACKSPIN if vel.y > 0.0 else Vector3.ZERO
+	var b := ball
+	_follow_local[0] = camera.to_local(hands[0].global_position + fling.normalized() * 0.3)
+	_follow_local[1] = camera.to_local(hands[1].global_position + fling.normalized() * 0.3)
+	_follow_time = 0.35
+	_let_go(vel, spin, true)
+	threw_ball.emit(b, fling.length())
+
+
+## Finds where the fling comes closest to the hoop on its way down and, if that
+## is already near, blends the launch toward a make with the same flight time.
+func _assist(from: Vector3, vel: Vector3) -> Vector3:
+	if hoop == null:
+		return vel
+	var target := hoop.rim_center + Vector3(0.0, 0.05, 0.0)
+	var g := Vector3(0.0, -_gravity, 0.0)
+	var best_t := -1.0
+	var best_d := INF
+	var t := 0.05
+	while t < 4.0:
+		if vel.y + g.y * t < 0.0:
+			var d := (from + vel * t + g * (0.5 * t * t)).distance_to(target)
+			if d < best_d:
+				best_d = d
+				best_t = t
+		t += 1.0 / 60.0
+	if best_t < 0.0 or best_d > ASSIST_RADIUS:
+		return vel
+	var perfect := (target - from - g * (0.5 * best_t * best_t)) / best_t
+	var strength := ASSIST_STRENGTH * sqrt(1.0 - best_d / ASSIST_RADIUS)
+	return vel.lerp(perfect, strength)
+
+
+func _flat_forward() -> Vector3:
 	var fwd := -global_transform.basis.z
 	fwd.y = 0.0
-	fwd = fwd.normalized()
-	var right := fwd.cross(Vector3.UP)
-	var set_point := camera.global_position + Vector3.UP * 0.2 + fwd * 0.28 + right * 0.16
-	# The ball sits off to the right of the eye, so aim it from there at
-	# whatever the crosshair is on.
-	var to_aim := _aim_point() - set_point
-	to_aim.y = 0.0
-	if to_aim.length() > 0.5:
-		fwd = to_aim.normalized()
-		right = fwd.cross(Vector3.UP)
-	var arc := deg_to_rad(clampf(BASE_ARC_DEG + rad_to_deg(pitch) * ARC_PER_PITCH, 30.0, 70.0))
-	var dir := (fwd * cos(arc) + Vector3.UP * sin(arc)).normalized()
-	return [set_point, dir, right]
-
-
-func _aim_point() -> Vector3:
-	var from := camera.global_position
-	var fwd := -camera.global_transform.basis.z
-	var query := PhysicsRayQueryParameters3D.create(from, from + fwd * 40.0, Util.LAYER_WORLD)
-	var hit := get_world_3d().direct_space_state.intersect_ray(query)
-	if hit.is_empty():
-		return from + fwd * 20.0
-	return hit["position"]
+	return fwd.normalized()
 
 
 func _reach_point() -> Vector3:
@@ -314,33 +318,6 @@ func _idle_offset(i: int) -> Vector3:
 	return Vector3(-0.24 if i == 0 else 0.24, -0.32, -0.42)
 
 
-func _drive_hands(targets: Array[Vector3], ff: Vector3) -> void:
-	for i in 2:
-		var hand := hands[i]
-		var err := targets[i] - hand.global_position
-		if err.length() > 1.5:
-			# Got stuck somewhere silly; snap back.
-			hand.global_position = targets[i]
-			hand.linear_velocity = ff
-		else:
-			hand.linear_velocity = (ff + err * HAND_GAIN).limit_length(25.0)
-
-
-func _drive_ball(target: Vector3, ff: Vector3) -> void:
-	var err := target - ball.global_position
-	if _settle > 0.0:
-		# Still pulling the ball in (from a rack, or up into form): gentler, no fumbles.
-		ball.linear_velocity = (ff + err * BALL_GAIN).limit_length(ff.length() + 6.0)
-		ball.angular_velocity *= 0.85
-		return
-	if err.length() > FUMBLE_DISTANCE:
-		_let_go(ball.linear_velocity, ball.angular_velocity, false)
-		fumbled.emit()
-		return
-	ball.linear_velocity = (ff + err * BALL_GAIN).limit_length(20.0)
-	ball.angular_velocity *= 0.85
-
-
 func _try_grab() -> void:
 	for node in get_tree().get_nodes_in_group("balls"):
 		var b := node as Ball
@@ -350,9 +327,9 @@ func _try_grab() -> void:
 			if hand.global_position.distance_to(b.global_position) < GRAB_DISTANCE:
 				ball = b
 				state = State.HOLD
-				_settle = SETTLE_TIME
-				_stroke = 0.0
-				_launch_pull = 0.0
+				_stuck_time = 0.0
+				_samples.clear()
+				_sample_times.clear()
 				b.grab()
 				_set_exception(b, true)
 				_excepted[b] = INF
@@ -364,13 +341,14 @@ func _let_go(vel: Vector3, spin: Vector3, is_shot: bool) -> void:
 	var b := ball
 	ball = null
 	state = State.EMPTY
-	_stroke = 0.0
+	_samples.clear()
+	_sample_times.clear()
 	b.release(vel, spin, is_shot)
 	# Keep ignoring the ball briefly so it doesn't clip our own hands on release.
 	_excepted[b] = 0.3
 
 
-## Drops the ball without any throw (used when the round resets).
+## Drops the ball without any fling (used when the round resets).
 func force_drop() -> void:
 	if ball:
 		_let_go(Vector3.ZERO, Vector3.ZERO, false)
