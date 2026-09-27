@@ -4,50 +4,10 @@ extends RefCounted
 
 # Collision layers (bit values).
 const LAYER_WORLD := 1
-const LAYER_BALL := 2
+const LAYER_PROP := 2
 const LAYER_HAND := 4
 const LAYER_PLAYER := 8
-
-const BALL_SHADER := """
-shader_type spatial;
-uniform vec3 base_color : source_color = vec3(0.86, 0.38, 0.1);
-uniform vec3 alt_color : source_color = vec3(0.86, 0.38, 0.1);
-uniform vec3 seam_color : source_color = vec3(0.04, 0.03, 0.03);
-varying vec3 obj_normal;
-
-void vertex() {
-	obj_normal = normalize(VERTEX);
-}
-
-void fragment() {
-	vec3 n = normalize(obj_normal);
-	float w = 0.022;
-	float seam = step(abs(n.x), w) + step(abs(n.y), w) + step(abs(abs(n.z) - 0.72), w * 0.8);
-	vec3 panel = mix(base_color, alt_color, step(0.0, n.x * n.y));
-	ALBEDO = mix(panel, seam_color, clamp(seam, 0.0, 1.0));
-	ROUGHNESS = 0.8;
-}
-"""
-
-const LATTICE_SHADER := """
-shader_type spatial;
-render_mode cull_disabled;
-uniform vec3 color : source_color = vec3(0.95);
-uniform vec2 cells = vec2(16.0, 5.0);
-uniform float thickness = 0.08;
-
-void fragment() {
-	vec2 uv = UV * cells;
-	float a = abs(fract(uv.x + uv.y) - 0.5);
-	float b = abs(fract(uv.x - uv.y) - 0.5);
-	if (min(a, b) > thickness) {
-		discard;
-	}
-	ALBEDO = color;
-	ROUGHNESS = 0.8;
-}
-"""
-
+const LAYER_BOW := 16
 
 ## Basis whose Y axis points along `dir` (used for cylinders and capsules).
 static func basis_y_to(dir: Vector3) -> Basis:
@@ -69,6 +29,32 @@ static func place_segment(node: Node3D, a: Vector3, b: Vector3) -> void:
 	var basis := basis_y_to(d)
 	basis.y *= length
 	node.global_transform = Transform3D(basis, (a + b) * 0.5)
+
+
+## Same as place_segment, but in the parent's local space.
+static func place_segment_local(node: Node3D, a: Vector3, b: Vector3) -> void:
+	var d := b - a
+	var length := d.length()
+	if length < 0.001:
+		node.visible = false
+		return
+	node.visible = true
+	var basis := basis_y_to(d)
+	basis.y *= length
+	node.transform = Transform3D(basis, (a + b) * 0.5)
+
+
+static func cylinder(radius: float, mat: Material, segments := 8) -> MeshInstance3D:
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = 1.0
+	cyl.radial_segments = segments
+	cyl.rings = 1
+	var mi := MeshInstance3D.new()
+	mi.mesh = cyl
+	mi.material_override = mat
+	return mi
 
 
 static func material(color: Color, roughness := 0.8, metallic := 0.0) -> StandardMaterial3D:
