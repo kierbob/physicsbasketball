@@ -10,8 +10,8 @@ config_version=5
 
 [application]
 
-config/name="Physics Basketball"
-config/description="A silly first-person physics basketball game. Three-point contest mode."
+config/name="Stupid Physics Archery"
+config/description="A janky first-person physics archery game. Hold the bow with RMB, pull the string with LMB."
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.4", "Forward Plus")
 
