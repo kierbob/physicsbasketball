@@ -1,11 +1,11 @@
 extends Node3D
 ## Builds the archery range and keeps score.
 ##
-## Ten arrows per round. Targets score their ring (10 for the bullseye) times
-## a distance multiplier; balloons and melons are worth a bonus, and the crates
-## are just there to be knocked over. R reloads the whole range.
+## Free mode: unlimited arrows, the score just keeps going. Targets score their
+## ring (10 for the bullseye) times a distance multiplier; balloons and melons
+## are worth a bonus, and the crates are just there to be knocked over.
+## R reloads the whole range.
 
-const SAVE_PATH := "user://archery.cfg"
 const PLAYER_SPAWN := Vector3(0.0, 0.1, 2.0)
 const BALLOON_POINTS := 15
 const MELON_POINTS := 10
@@ -16,9 +16,8 @@ var hud: Hud
 var bow: Bow
 
 var score := 0
-var best := 0
-var _in_flight := 0
-var _round_over := false
+var shots := 0
+var best_shot := 0
 
 
 func _ready() -> void:
@@ -41,16 +40,14 @@ func _ready() -> void:
 	add_child(hud)
 	player.hud = hud
 	player.arrow_loosed.connect(_on_arrow_loosed)
-	player.dry_fired.connect(func() -> void: hud.flash("*twang*  (out of arrows)", Color(0.8, 0.8, 0.8)))
 	player.bow_dropped.connect(func() -> void: hud.flash("dropped the bow lol", Color(1.0, 0.7, 0.4)))
 
-	best = _load_best()
-	hud.set_banner("Click to play\nWalk to the table and hold RMB on the bow to pick it up")
+	hud.set_banner("Click to play\nLook at the bow on the table and click to pick it up")
 	player.bow_grabbed.connect(func() -> void: hud.set_banner(""), CONNECT_ONE_SHOT)
 
 
 func _process(_delta: float) -> void:
-	hud.set_stats(score, player.arrows_left, best)
+	hud.set_stats(score, shots, best_shot)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -66,8 +63,7 @@ func _on_arrow_loosed(tip: Vector3, vel: Vector3, draw: float, accidental: bool)
 	arrow.position = tip
 	add_child(arrow)
 	arrow.hit.connect(_on_arrow_hit)
-	arrow.finished.connect(_on_arrow_finished)
-	_in_flight += 1
+	shots += 1
 	if accidental:
 		hud.flash("Oops", Color(1.0, 0.7, 0.4))
 	elif draw < 0.25:
@@ -82,6 +78,7 @@ func _on_arrow_hit(_arrow: Arrow, body: Node, point: Vector3) -> void:
 			return
 		var points := ring * target.multiplier
 		score += points
+		best_shot = maxi(best_shot, points)
 		if ring == 10:
 			hud.flash("BULLSEYE!  +%d" % points, Color(1.0, 0.85, 0.2))
 		elif target.multiplier > 1:
@@ -91,38 +88,15 @@ func _on_arrow_hit(_arrow: Arrow, body: Node, point: Vector3) -> void:
 	elif body is Balloon:
 		(body as Balloon).pop()
 		score += BALLOON_POINTS
+		best_shot = maxi(best_shot, BALLOON_POINTS)
 		hud.flash("POP!  +%d" % BALLOON_POINTS, Color(0.6, 0.9, 1.0))
 	elif body.is_in_group("melon") and not body.has_meta("scored"):
 		body.set_meta("scored", true)
 		score += MELON_POINTS
+		best_shot = maxi(best_shot, MELON_POINTS)
 		hud.flash("Melon!  +%d" % MELON_POINTS, Color(0.5, 1.0, 0.4))
 	elif body.is_in_group("player"):
 		hud.flash("OW. You shot yourself.", Color(1.0, 0.4, 0.35))
-
-
-func _on_arrow_finished(_arrow: Arrow) -> void:
-	_in_flight -= 1
-	if player.arrows_left == 0 and _in_flight <= 0 and not _round_over:
-		_round_over = true
-		var text := "Final score: %d" % score
-		if score > best:
-			best = score
-			_save_best(best)
-			text += "\nNew best!"
-		hud.set_banner(text + "\nPress R to go again")
-
-
-func _load_best() -> int:
-	var cfg := ConfigFile.new()
-	if cfg.load(SAVE_PATH) != OK:
-		return 0
-	return int(cfg.get_value("range", "best", 0))
-
-
-func _save_best(value: int) -> void:
-	var cfg := ConfigFile.new()
-	cfg.set_value("range", "best", value)
-	cfg.save(SAVE_PATH)
 
 
 # --- Input map ---------------------------------------------------------------
@@ -135,8 +109,9 @@ func _setup_input() -> void:
 	_bind_keys("jump", [KEY_SPACE])
 	_bind_keys("sprint", [KEY_SHIFT])
 	_bind_keys("restart", [KEY_R])
+	_bind_keys("drop", [KEY_Q])
 	_bind_mouse("draw", MOUSE_BUTTON_LEFT)
-	_bind_mouse("bow", MOUSE_BUTTON_RIGHT)
+	_bind_mouse("zoom", MOUSE_BUTTON_RIGHT)
 
 
 func _bind_keys(action: String, keys: Array) -> void:

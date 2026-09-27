@@ -29,9 +29,9 @@ func _ready() -> void:
 	_help.modulate = Color(1, 1, 1, 0.8)
 	_help.text = "\n".join([
 		"WASD move  ·  Space jump  ·  Shift sprint",
-		"Hold RMB: grab the bow, keep holding or you drop it. Mouse moves your bow arm",
-		"Hold LMB: grab the string and pull  ·  let go to shoot",
-		"No bow + hold LMB: flail your hand around",
+		"Click the bow to pick it up  ·  Q drop it",
+		"Hold LMB: grab the string and pull  ·  let go to shoot  ·  hold RMB: zoom",
+		"The pink dot is where the arrow will land. Full draw hits the crosshair",
 		"R restart  ·  Esc free the mouse",
 	])
 
@@ -57,8 +57,8 @@ func _process(delta: float) -> void:
 	_overlay.queue_redraw()
 
 
-func set_stats(score: int, arrows_left: int, best: int) -> void:
-	_stats.text = "Score  %d\nArrows  %d\nBest  %d" % [score, arrows_left, best]
+func set_stats(score: int, shots: int, best_shot: int) -> void:
+	_stats.text = "Score  %d\nShots  %d\nBest shot  %d" % [score, shots, best_shot]
 
 
 func flash(text: String, color := Color.WHITE) -> void:
@@ -72,7 +72,7 @@ func set_banner(text: String) -> void:
 	_banner.text = text
 
 
-## The bow's aim point on screen. The center crosshair hides while it shows.
+## Where the arrow would land right now, drawn alongside the crosshair.
 func set_sight(visible_now: bool, pos: Vector2) -> void:
 	_sight_visible = visible_now
 	_sight_pos = pos
@@ -80,9 +80,8 @@ func set_sight(visible_now: bool, pos: Vector2) -> void:
 
 func _draw_overlay() -> void:
 	if _sight_visible:
-		_overlay.draw_circle(_sight_pos, 3.5, Color(1.0, 0.35, 0.25, 0.95))
-		_overlay.draw_arc(_sight_pos, 7.0, 0.0, TAU, 20, Color(0, 0, 0, 0.5), 1.5)
-		return
+		_overlay.draw_circle(_sight_pos, 4.0, Color(1.0, 0.25, 0.6, 0.95))
+		_overlay.draw_arc(_sight_pos, 8.0, 0.0, TAU, 20, Color(0, 0, 0, 0.5), 1.5)
 	var center := _overlay.size * 0.5
 	_overlay.draw_circle(center, 3.0, Color(1, 1, 1, 0.9))
 	_overlay.draw_arc(center, 6.0, 0.0, TAU, 20, Color(0, 0, 0, 0.5), 1.5)
